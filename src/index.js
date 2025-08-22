@@ -10,6 +10,12 @@ export default {
       return handleCORS();
     }
     
+    // URLパラメーターからのプロキシリクエスト処理
+    if (url.searchParams.has('url')) {
+      const targetUrl = url.searchParams.get('url');
+      return handleProxyFromParam(request, targetUrl, env);
+    }
+    
     // プロキシのメインページ
     if (url.pathname === '/' || url.pathname === '/index.html') {
       return new Response(getIndexHTML(), {
@@ -38,7 +44,234 @@ export default {
   }
 };
 
-function getCORSHeaders() {
+async function handleProxyFromParam(request, targetUrl, env) {
+  try {
+    console.log('Proxy from param:', targetUrl);
+    
+    // URLの妥当性チェック
+    if (!isValidUrl(targetUrl)) {
+      console.log('Invalid URL from param:', targetUrl);
+      return new Response(`Invalid URL: ${targetUrl}`, { 
+        status: 400,
+        headers: getCORSHeaders()
+      });
+    }
+    
+    const parsedTargetUrl = new URL(targetUrl);
+    
+    // ブロックリストチェック
+    if (isBlocked(parsedTargetUrl.hostname)) {
+      return new Response('Access denied', { 
+        status: 403,
+        headers: getCORSHeaders()
+      });
+    }
+    
+    // リクエストヘッダーを準備
+    const headers = new Headers();
+    
+    // 許可されたヘッダーのみコピー
+    const allowedHeaders = [
+      'accept',
+      'accept-language', 
+      'cache-control',
+      'content-type',
+      'user-agent'
+    ];
+    
+    for (const [key, value] of request.headers) {
+      if (allowedHeaders.includes(key.toLowerCase())) {
+        headers.set(key, value);
+      }
+    }
+    
+    // 必要なヘッダーを設定
+    headers.set('Origin', `${parsedTargetUrl.protocol}//${parsedTargetUrl.host}`);
+    headers.set('Referer', targetUrl);
+    headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+    
+    // プロキシリクエストを送信
+    const proxyRequest = new Request(targetUrl, {
+      method: 'GET',
+      headers: headers,
+      redirect: 'follow'
+    });
+    
+    const response = await fetch(proxyRequest);
+    
+    // レスポンスヘッダーを処理
+    const responseHeaders = new Headers(getCORSHeaders());
+    
+    // 安全なヘッダーのみコピー
+    const safeHeaders = [
+      'content-type',
+      'cache-control',
+      'expires',
+      'last-modified',
+      'etag'
+    ];
+    
+    for (const [key, value] of response.headers) {
+      if (safeHeaders.includes(key.toLowerCase())) {
+        responseHeaders.set(key, value);
+      }
+    }
+    
+    // レスポンスボディを取得
+    const responseBody = await response.arrayBuffer();
+    const contentType = response.headers.get('content-type') || '';
+    let finalBody = responseBody;
+    
+    // HTMLコンテンツの場合、URLを書き換え
+    if (contentType.includes('text/html')) {
+      try {
+        const htmlContent = new TextDecoder('utf-8').decode(responseBody);
+        // URLパラメーター形式用のHTML書き換え
+        const modifiedHtml = rewriteHtmlUrlsForParam(htmlContent, parsedTargetUrl, new URL(request.url).origin);
+        finalBody = new TextEncoder().encode(modifiedHtml);
+        responseHeaders.set('Content-Length', finalBody.byteLength.toString());
+      } catch (e) {
+        console.log('HTML processing error:', e);
+        finalBody = responseBody;
+      }
+    }
+    
+    return new Response(finalBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: responseHeaders
+    });
+    
+  } catch (error) {
+    console.error('Proxy from param error:', error);
+    return new Response(`Proxy Error: ${error.message}`, { 
+      status: 500,
+      headers: {
+        'Content-Type': 'text/plain',
+        ...getCORSHeaders()
+      }
+    });
+  }
+}
+
+function rewriteHtmlUrlsForParam(html, targetUrl, proxyOrigin) {
+  const baseUrl = `${targetUrl.protocol}//${targetUrl.host}`;
+  
+  // 相対URLと絶対URLを書き換え（URLパラメーター形式用）
+  html = html.replace(
+    /(href|src|action|data-src|data-href)=["']([^"']+)["']/gi,
+    (match, attr, url) => {
+      try {
+        if (url.startsWith('data:') || url.startsWith('javascript:') || url.startsWith('#')) {
+          return match;
+        }
+        
+        let newUrl;
+        if (url.startsWith('//')) {
+          newUrl = `${targetUrl.protocol}${url}`;
+        } else if (url.startsWith('/')) {
+          newUrl = `${baseUrl}${url}`;
+        } else if (url.startsWith('http')) {
+          newUrl = url;
+        } else {
+          newUrl = new URL(url, targetUrl.href).href;
+        }
+        
+        return `${attr}="${proxyOrigin}/?url=${encodeURIComponent(newUrl)}"`;
+      } catch {
+        return match;
+      }
+    }
+  );
+  
+  // Meta refresh書き換え
+  html = html.replace(
+    /<meta\s+http-equiv=["']refresh["']\s+content=["'](\d+);url=([^"']+)["']/gi,
+    (match, time, url) => {
+      try {
+        let newUrl;
+        if (url.startsWith('//')) {
+          newUrl = `${targetUrl.protocol}${url}`;
+        } else if (url.startsWith('/')) {
+          newUrl = `${baseUrl}${url}`;
+        } else if (url.startsWith('http')) {
+          newUrl = url;
+        } else {
+          newUrl = new URL(url, targetUrl.href).href;
+        }
+        return `<meta http-equiv="refresh" content="${time};url=${proxyOrigin}/?url=${encodeURIComponent(newUrl)}"`;
+      } catch {
+        return match;
+      }
+    }
+  );
+  
+  // プロキシスクリプトを追加
+  const proxyScript = getProxyScriptForParam(proxyOrigin, baseUrl);
+  html = html.replace(/<\/head>/i, `${proxyScript}</head>`);
+  
+  return html;
+}
+
+function getProxyScriptForParam(proxyOrigin, baseUrl) {
+  return `
+    <script>
+    // Proxy JavaScript injection (URL param version)
+    (function() {
+      const PROXY_ORIGIN = '${proxyOrigin}';
+      const BASE_URL = '${baseUrl}';
+      
+      // Helper function to encode URL for param method
+      function encodeProxyUrl(url) {
+        try {
+          let fullUrl;
+          if (url.startsWith('//')) {
+            fullUrl = window.location.protocol + url;
+          } else if (url.startsWith('/')) {
+            fullUrl = BASE_URL + url;
+          } else if (url.startsWith('http')) {
+            fullUrl = url;
+          } else {
+            fullUrl = new URL(url, window.location.href).href;
+          }
+          return PROXY_ORIGIN + '/?url=' + encodeURIComponent(fullUrl);
+        } catch {
+          return url;
+        }
+      }
+      
+      // Override fetch
+      const originalFetch = window.fetch;
+      window.fetch = function(input, init) {
+        if (typeof input === 'string' && !input.startsWith('data:')) {
+          input = encodeProxyUrl(input);
+        }
+        return originalFetch.call(this, input, init);
+      };
+      
+      // Override XMLHttpRequest
+      const originalXHROpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function(method, url, ...args) {
+        if (typeof url === 'string' && !url.startsWith('data:')) {
+          url = encodeProxyUrl(url);
+        }
+        return originalXHROpen.call(this, method, url, ...args);
+      };
+      
+      // Override window.open
+      const originalOpen = window.open;
+      window.open = function(url, ...args) {
+        if (url && typeof url === 'string' && !url.startsWith('data:')) {
+          url = encodeProxyUrl(url);
+        }
+        return originalOpen.call(this, url, ...args);
+      };
+      
+      console.log('Proxy JavaScript loaded successfully (param version)');
+    })();
+    </script>
+  `;
+}
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
