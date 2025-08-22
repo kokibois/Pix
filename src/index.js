@@ -858,5 +858,5 @@ function getIndexHTML() {
         document.head.appendChild(style);
     </script>
 </body>
-</html>\`;
+</html>`;
 }
