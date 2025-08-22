@@ -783,18 +783,17 @@ function getIndexHTML() {
         function showNotification(message, type = 'info') {
             const notification = document.createElement('div');
             notification.textContent = message;
-            notification.style.cssText = \`
-                position: fixed;
-                top: 80px;
-                right: 20px;
-                background: \${type === 'error' ? '#f56565' : '#48bb78'};
-                color: white;
-                padding: 15px 20px;
-                border-radius: 10px;
-                font-weight: 600;
-                z-index: 1000;
-                animation: slideIn 0.3s ease;
-            \`;
+            notification.style.cssText = 
+                'position: fixed;' +
+                'top: 80px;' +
+                'right: 20px;' +
+                'background: ' + (type === 'error' ? '#f56565' : '#48bb78') + ';' +
+                'color: white;' +
+                'padding: 15px 20px;' +
+                'border-radius: 10px;' +
+                'font-weight: 600;' +
+                'z-index: 1000;' +
+                'animation: slideIn 0.3s ease;';
             
             document.body.appendChild(notification);
             
