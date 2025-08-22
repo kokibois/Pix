@@ -1,4 +1,4 @@
-name = "web-proxy-worker"
+name = "pix"
 main = "src/index.js"
 compatibility_date = "2025-08-22"
 compatibility_flags = ["nodejs_compat"]
