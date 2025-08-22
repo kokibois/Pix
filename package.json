@@ -1,0 +1,23 @@
+{
+  "name": "web-proxy-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Workers Web Proxy Service",
+  "main": "src/index.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "publish": "wrangler deploy --env production",
+    "tail": "wrangler tail",
+    "test": "wrangler dev --local"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "proxy",
+    "web-proxy"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
