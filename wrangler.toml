@@ -1,0 +1,23 @@
+name = "web-proxy-worker"
+main = "src/index.js"
+compatibility_date = "2025-08-22"
+compatibility_flags = ["nodejs_compat"]
+
+# アカウントIDとゾーンID（オプション）
+# account_id = "your-account-id-here"
+# zone_id = "your-zone-id-here"
+
+# カスタムドメインを使用する場合（オプション）
+# routes = [
+#   { pattern = "proxy.yourdomain.com/*", custom_domain = true }
+# ]
+
+# 環境変数（必要に応じて）
+[vars]
+# ALLOWED_ORIGINS = "https://yourdomain.com"
+# RATE_LIMIT = "100"
+
+# 本番環境の設定
+[env.production]
+name = "web-proxy-worker-production"
+# vars = { ENVIRONMENT = "production" }
