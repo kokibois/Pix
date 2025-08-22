@@ -68,20 +68,31 @@ async function handleProxyRequest(request, url, env) {
     const proxyPath = url.pathname.replace('/proxy/', '');
     let targetUrl;
     
-    // Base64エンコード対応
+    // URLデコード処理を改善
     try {
-      targetUrl = atob(proxyPath);
-    } catch {
-      targetUrl = decodeURIComponent(proxyPath);
+      // まずBase64デコードを試す
+      if (proxyPath.match(/^[A-Za-z0-9+/]+=*$/)) {
+        targetUrl = atob(proxyPath);
+      } else {
+        // URLデコードを試す
+        targetUrl = decodeURIComponent(proxyPath);
+      }
+    } catch (e) {
+      console.log('URL decode error:', e);
+      // フォールバック: そのまま使用
+      targetUrl = proxyPath;
     }
     
     // URLの妥当性チェック
     if (!isValidUrl(targetUrl)) {
-      return new Response('Invalid URL', { 
+      console.log('Invalid URL:', targetUrl);
+      return new Response(`Invalid URL: ${targetUrl}`, { 
         status: 400,
         headers: getCORSHeaders()
       });
     }
+    
+    console.log('Proxying to:', targetUrl);
     
     const parsedTargetUrl = new URL(targetUrl);
     
@@ -100,11 +111,9 @@ async function handleProxyRequest(request, url, env) {
     const allowedHeaders = [
       'accept',
       'accept-language', 
-      'accept-encoding',
       'cache-control',
       'content-type',
-      'user-agent',
-      'cookie'
+      'user-agent'
     ];
     
     for (const [key, value] of request.headers) {
@@ -116,7 +125,7 @@ async function handleProxyRequest(request, url, env) {
     // 必要なヘッダーを設定
     headers.set('Origin', `${parsedTargetUrl.protocol}//${parsedTargetUrl.host}`);
     headers.set('Referer', targetUrl);
-    headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     
     // リクエストボディの処理
     let body = null;
@@ -128,7 +137,8 @@ async function handleProxyRequest(request, url, env) {
     const proxyRequest = new Request(targetUrl, {
       method: request.method,
       headers: headers,
-      body: body
+      body: body,
+      redirect: 'follow'
     });
     
     const response = await fetch(proxyRequest);
@@ -139,12 +149,10 @@ async function handleProxyRequest(request, url, env) {
     // 安全なヘッダーのみコピー
     const safeHeaders = [
       'content-type',
-      'content-length',
       'cache-control',
       'expires',
       'last-modified',
-      'etag',
-      'set-cookie'
+      'etag'
     ];
     
     for (const [key, value] of response.headers) {
@@ -160,18 +168,29 @@ async function handleProxyRequest(request, url, env) {
     
     // HTMLコンテンツの場合、URLを書き換え
     if (contentType.includes('text/html')) {
-      const htmlContent = new TextDecoder('utf-8').decode(responseBody);
-      const modifiedHtml = rewriteHtmlUrls(htmlContent, parsedTargetUrl, url.origin);
-      finalBody = new TextEncoder().encode(modifiedHtml);
-      responseHeaders.set('Content-Length', finalBody.byteLength.toString());
+      try {
+        const htmlContent = new TextDecoder('utf-8').decode(responseBody);
+        const modifiedHtml = rewriteHtmlUrls(htmlContent, parsedTargetUrl, url.origin);
+        finalBody = new TextEncoder().encode(modifiedHtml);
+        responseHeaders.set('Content-Length', finalBody.byteLength.toString());
+      } catch (e) {
+        console.log('HTML processing error:', e);
+        // HTMLエラーの場合はオリジナルを返す
+        finalBody = responseBody;
+      }
     }
     
     // CSSファイルのURL書き換え
     else if (contentType.includes('text/css')) {
-      const cssContent = new TextDecoder('utf-8').decode(responseBody);
-      const modifiedCss = rewriteCssUrls(cssContent, parsedTargetUrl, url.origin);
-      finalBody = new TextEncoder().encode(modifiedCss);
-      responseHeaders.set('Content-Length', finalBody.byteLength.toString());
+      try {
+        const cssContent = new TextDecoder('utf-8').decode(responseBody);
+        const modifiedCss = rewriteCssUrls(cssContent, parsedTargetUrl, url.origin);
+        finalBody = new TextEncoder().encode(modifiedCss);
+        responseHeaders.set('Content-Length', finalBody.byteLength.toString());
+      } catch (e) {
+        console.log('CSS processing error:', e);
+        finalBody = responseBody;
+      }
     }
     
     return new Response(finalBody, {
@@ -182,7 +201,7 @@ async function handleProxyRequest(request, url, env) {
     
   } catch (error) {
     console.error('Proxy error:', error);
-    return new Response(`Proxy Error: ${error.message}`, { 
+    return new Response(`Proxy Error: ${error.message}\nTarget URL might be invalid or unreachable.`, { 
       status: 500,
       headers: {
         'Content-Type': 'text/plain',
@@ -215,7 +234,7 @@ function rewriteHtmlUrls(html, targetUrl, proxyOrigin) {
           newUrl = new URL(url, targetUrl.href).href;
         }
         
-        const encodedUrl = btoa(newUrl);
+        const encodedUrl = encodeURIComponent(newUrl);
         return `${attr}="${proxyOrigin}/proxy/${encodedUrl}"`;
       } catch {
         return match;
@@ -238,7 +257,7 @@ function rewriteHtmlUrls(html, targetUrl, proxyOrigin) {
         } else {
           newUrl = new URL(url, targetUrl.href).href;
         }
-        const encodedUrl = btoa(newUrl);
+        const encodedUrl = encodeURIComponent(newUrl);
         return `<meta http-equiv="refresh" content="${time};url=${proxyOrigin}/proxy/${encodedUrl}"`;
       } catch {
         return match;
@@ -275,7 +294,7 @@ function rewriteCssUrls(css, targetUrl, proxyOrigin) {
           newUrl = new URL(url, targetUrl.href).href;
         }
         
-        const encodedUrl = btoa(newUrl);
+        const encodedUrl = encodeURIComponent(newUrl);
         return `url("${proxyOrigin}/proxy/${encodedUrl}")`;
       } catch {
         return match;
@@ -305,7 +324,7 @@ function getProxyScript(proxyOrigin, baseUrl) {
           } else {
             fullUrl = new URL(url, window.location.href).href;
           }
-          return PROXY_ORIGIN + '/proxy/' + btoa(fullUrl);
+          return PROXY_ORIGIN + '/proxy/' + encodeURIComponent(fullUrl);
         } catch {
           return url;
         }
@@ -771,12 +790,9 @@ function getIndexHTML() {
             button.disabled = true;
             
             // プロキシURLに移動
-            const encodedUrl = btoa(targetUrl);
-            const proxyUrl = '/proxy/' + encodedUrl;
-            
-            setTimeout(() => {
-                window.location.href = proxyUrl;
-            }, 500);
+            const proxyUrl = '/proxy/' + encodeURIComponent(targetUrl);
+            console.log('Navigating to:', proxyUrl);
+            window.location.href = proxyUrl;
         });
         
         // 通知表示
@@ -844,17 +860,15 @@ function getIndexHTML() {
         
         // CSS animations
         const style = document.createElement('style');
-        style.textContent = \`
-            @keyframes slideIn {
-                from { transform: translateX(100%); opacity: 0; }
-                to { transform: translateX(0); opacity: 1; }
-            }
-            
-            @keyframes slideOut {
-                from { transform: translateX(0); opacity: 1; }
-                to { transform: translateX(100%); opacity: 0; }
-            }
-        \`;
+        style.textContent = 
+            '@keyframes slideIn {' +
+            '  from { transform: translateX(100%); opacity: 0; }' +
+            '  to { transform: translateX(0); opacity: 1; }' +
+            '}' +
+            '@keyframes slideOut {' +
+            '  from { transform: translateX(0); opacity: 1; }' +
+            '  to { transform: translateX(100%); opacity: 0; }' +
+            '}';
         document.head.appendChild(style);
     </script>
 </body>
